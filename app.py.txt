@@ -1,0 +1,165 @@
+import streamlit as st
+import math
+import numpy as np
+
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(
+    page_title="Nexus Fixas - Análise Estatística",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- ESTILIZAÇÃO E CABEÇALHO ---
+st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: #1E88E5;
+        text-align: center;
+        margin-bottom: 0px;
+    }
+    .sub-header {
+        font-size: 1.1rem;
+        color: #6c757d;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+    .card-valor {
+        padding: 15px;
+        border-radius: 10px;
+        background-color: #e8f5e9;
+        border-left: 5px solid #2e7d32;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="main-header">⚡ NEXUS FIXAS</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Inteligência Estatística & Dicas de Valor Esperado (EV+)</div>', unsafe_allow_html=True)
+
+# --- MOTOR DE CÁLCULO ---
+def poisson_pmf(k, lambda_val):
+    return (math.pow(lambda_val, k) * math.exp(-lambda_val)) / math.factorial(k)
+
+def analisar_partida(media_liga, time_casa, time_fora, odds):
+    f_atq_casa = time_casa['gols_marcados'] / media_liga
+    f_def_fora = time_fora['gols_sofridos'] / media_liga
+    f_atq_fora = time_fora['gols_marcados'] / media_liga
+    f_def_casa = time_casa['gols_sofridos'] / media_liga
+
+    imp_atq_casa = 1.0 - time_casa['desf_ataque']
+    imp_def_casa = 1.0 - time_casa['desf_defesa']
+    imp_atq_fora = 1.0 - time_fora['desf_ataque']
+    imp_def_fora = 1.0 - time_fora['desf_defesa']
+
+    lambda_casa = max(0.2, (f_atq_casa * imp_atq_casa) * (f_def_fora / imp_def_fora) * media_liga * time_casa['fator_casa'])
+    lambda_fora = max(0.2, (f_atq_fora * imp_atq_fora) * (f_def_casa / imp_def_casa) * media_liga)
+
+    max_gols = 6
+    matriz = np.zeros((max_gols, max_gols))
+    for i in range(max_gols):
+        for j in range(max_gols):
+            matriz[i][j] = poisson_pmf(i, lambda_casa) * poisson_pmf(j, lambda_fora)
+
+    prob_casa = np.sum(np.tril(matriz, -1))
+    prob_empate = np.sum(np.diag(matriz))
+    prob_fora = np.sum(np.triu(matriz, 1))
+
+    prob_under25 = np.sum([matriz[i][j] for i in range(max_gols) for j in range(max_gols) if i + j < 2.5])
+    prob_over25 = 1.0 - prob_under25
+    prob_btts = np.sum(matriz[1:, 1:])
+
+    odd_j_casa = 1 / prob_casa if prob_casa > 0 else 99
+    odd_j_empate = 1 / prob_empate if prob_empate > 0 else 99
+    odd_j_fora = 1 / prob_fora if prob_fora > 0 else 99
+
+    ev_casa = (prob_casa * odds['casa']) - 1
+    ev_empate = (prob_empate * odds['empate']) - 1
+    ev_fora = (prob_fora * odds['fora']) - 1
+
+    return {
+        "xG": (round(lambda_casa, 2), round(lambda_fora, 2)),
+        "probs": (prob_casa, prob_empate, prob_fora),
+        "odds_justas": (odd_j_casa, odd_j_empate, odd_j_fora),
+        "evs": (ev_casa, ev_empate, ev_fora),
+        "over25": prob_over25,
+        "btts": prob_btts
+    }
+
+# --- PAINEL DE ENTRADA DE DADOS ---
+st.sidebar.header("⚙️ Parâmetros Gerais")
+media_liga = st.sidebar.number_input("Média de Gols da Liga/Torneio", value=2.4, step=0.1)
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.subheader("🏠 Mandante")
+    nome_casa = st.text_input("Time Mandante", "Petro de Luanda")
+    gols_m_casa = st.number_input(f"Média Gols Marcados ({nome_casa})", value=1.8, step=0.1)
+    gols_s_casa = st.number_input(f"Média Gols Sofridos ({nome_casa})", value=0.6, step=0.1)
+    desf_atq_casa = st.slider(f"Desfalque Ataque ({nome_casa})", 0.0, 0.5, 0.0, 0.05, help="0.10 = 10% de perda de força ofensiva")
+    desf_def_casa = st.slider(f"Desfalque Defesa ({nome_casa})", 0.0, 0.5, 0.1, 0.05)
+
+with col2:
+    st.subheader("✈️ Visitante")
+    nome_fora = st.text_input("Time Visitante", "1º de Agosto")
+    gols_m_fora = st.number_input(f"Média Gols Marcados ({nome_fora})", value=1.1, step=0.1)
+    gols_s_fora = st.number_input(f"Média Gols Sofridos ({nome_fora})", value=0.9, step=0.1)
+    desf_atq_fora = st.slider(f"Desfalque Ataque ({nome_fora})", 0.0, 0.5, 0.25, 0.05)
+    desf_def_fora = st.slider(f"Desfalque Defesa ({nome_fora})", 0.0, 0.5, 0.0, 0.05)
+
+with col3:
+    st.subheader("💰 Odds da Casa")
+    odd_casa = st.number_input(f"Odd Vitória ({nome_casa})", value=2.10, step=0.05)
+    odd_empate = st.number_input("Odd Empate", value=3.20, step=0.05)
+    odd_fora = st.number_input(f"Odd Vitória ({nome_fora})", value=3.80, step=0.05)
+
+st.markdown("<br>", unsafe_allow_html=True)
+if st.button("🚀 Processar Análise Nexus", type="primary", use_container_width=True):
+    data_casa = {"gols_marcados": gols_m_casa, "gols_sofridos": gols_s_casa, "desf_ataque": desf_atq_casa, "desf_defesa": desf_def_casa, "fator_casa": 1.15}
+    data_fora = {"gols_marcados": gols_m_fora, "gols_sofridos": gols_s_fora, "desf_ataque": desf_atq_fora, "desf_defesa": desf_def_fora}
+    odds_mercado = {"casa": odd_casa, "empate": odd_empate, "fora": odd_fora}
+
+    res = analisar_partida(media_liga, data_casa, data_fora, odds_mercado)
+
+    st.markdown("---")
+    st.header("📊 Painel de Diagnóstico Nexus")
+    
+    col_a, col_b, col_c = st.columns(3)
+    
+    with col_a:
+        st.subheader("🎯 Expectativa de Gols (xG)")
+        st.metric(label=f"xG {nome_casa}", value=res["xG"][0])
+        st.metric(label=f"xG {nome_fora}", value=res["xG"][1])
+
+    with col_b:
+        st.subheader("🎲 Probabilidades 1X2")
+        st.write(f"• **{nome_casa}:** {res['probs'][0]*100:.1f}% *(Odd Justa: {res['odds_justas'][0]:.2f})*")
+        st.write(f"• **Empate:** {res['probs'][1]*100:.1f}% *(Odd Justa: {res['odds_justas'][1]:.2f})*")
+        st.write(f"• **{nome_fora}:** {res['probs'][2]*100:.1f}% *(Odd Justa: {res['odds_justas'][2]:.2f})*")
+
+    with col_c:
+        st.subheader("⚽ Gols & Ambas Marcam")
+        st.write(f"• **Over 2.5 Gols:** {res['over25']*100:.1f}%")
+        st.write(f"• **Ambas Marcam (BTTS):** {res['btts']*100:.1f}%")
+
+    st.markdown("---")
+    st.header("⚡ Dicas Nexus Fixas (Entradas com Valor +EV)")
+    
+    encontrou_valor = False
+    
+    if res["evs"][0] > 0.05:
+        st.success(f"🔥 **FIXA RECOMENDADA:** Vitória de **{nome_casa}** | Odd da Casa: **{odd_casa}** | Odd Justa Nexus: **{res['odds_justas'][0]:.2f}** | EV+: **+{res['evs'][0]*100:.1f}%**")
+        encontrou_valor = True
+        
+    if res["evs"][1] > 0.05:
+        st.success(f"🔥 **FIXA RECOMENDADA:** **Empate** | Odd da Casa: **{odd_empate}** | Odd Justa Nexus: **{res['odds_justas'][1]:.2f}** | EV+: **+{res['evs'][1]*100:.1f}%**")
+        encontrou_valor = True
+        
+    if res["evs"][2] > 0.05:
+        st.success(f"🔥 **FIXA RECOMENDADA:** Vitória de **{nome_fora}** | Odd da Casa: **{odd_fora}** | Odd Justa Nexus: **{res['odds_justas'][2]:.2f}** | EV+: **+{res['evs'][2]*100:.1f}%**")
+        encontrou_valor = True
+
+    if not encontrou_valor:
+        st.info("⚠️ **Nenhuma Entrada com Valor (EV+):** As odds do mercado estão ajustadas. Não há margem segura de aposta nesta partida.")
